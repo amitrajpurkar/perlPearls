@@ -1,0 +1,6 @@
+Revision history for Perl extension au::com::company::scandocs::pdfExtractionService.
+
+0.01  Tue Jan  8 16:35:06 2013
+	- original version; created by h2xs 1.23 with options
+		-AXn au::com::company::scandocs::pdfExtractionService
+

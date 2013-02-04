@@ -1,0 +1,76 @@
+au-com-company-scandocs-ams version 0.01
+=========================================
+
+The README is used to introduce the module and provide instructions on
+how to install the module, any machine dependencies it may have (for
+example C compilers and installed libraries) and any other information
+that should be provided before the module is installed.
+
+A README file is required for CPAN modules since CPAN extracts the
+README file from a module distribution so that people browsing the
+archive can use it get an idea of the modules uses. It is usually a
+good idea to provide version information here so that people can
+decide whether fixes for the module are worth downloading.
+
+INSTALLATION
+
+To install this module type the following:
+
+   perl Makefile.PL
+   make
+   make test
+   make install
+
+DEPENDENCIES
+
+This module requires these other modules and libraries:
+
+  blah blah blah
+
+ABOUT THE MODULE
+
+au::com::company::scandocs::ams - houses reusable sub-routines for fetching document from AMS and inserting documents into AMS
+
+SYNOPSIS
+
+  use au::com::company::scandocs::ams;
+  my $scandocs = new au::com::company::scandocs::ams;
+  $scandocs->fetchFromAms($documentReferenceId, $absolutePathToTempDocument);
+  $scandocs->pushDocumentIntoAms($documentReferenceId, $absolutePathToSourcePdf, $insertUpdateFlag, $docid, $docType, $department, $filesize, $branch, $shipno, $docDate, $absolutePathToTempTXTFile);
+
+DESCRIPTION
+
+This module has been created to help maximize reuse of tried and tested sub-routines of fetching / inserting documents with AMS.
+Developers should be able to re-use this module across all LDW linux servers like proc1, posti, etc seamlessly.
+
+METHODS
+
+$scandocs->fetchFromAms($documentReferenceId, $absolutePathToTempDocument);
+
+This one is a "read" method for Scan-Docs.. so from the module use import tags ':all' or ':read' so that this method can be used
+This method returns two-valued-list; meaning it returns a list having two items, one the status code 'OK' or 'FAILED' and second the descriptive message 
+Successful call to this method, creates a valid, non-zero-sized, PDF file in the location specified by 'absolutePathToTempDocument'; the return value for success is a list giving return-code 'OK' and a descriptive message;
+Unsuccessful call will not create the file in the location specified by that parameter; the return value for success is a list giving return-code 'FAILED' and a descriptive message;
+
+$scandocs->pushDocumentIntoAms($documentReferenceId, $absolutePathToSourcePdf, $insertUpdateFlag, $docid, $docType, $department, $filesize, $branch, $shipno, $docDate, $absolutePathToTempTXTFile);
+
+This one is under ":write" and ":all" tags.. so from the module use these import tags so that this method can be accessed
+Behind the scene this method first initializes Samba connection to AMS server, then pushes the PDF file into archive location, followed by the TXT file push for NeoDocs process.
+This method returns two-valued-list; meaning it returns a list having two items, one the status code 'OK' or 'FAILED' and second the descriptive message 
+This method will return a list ("OK","success-message") if all three sub-steps are successful;
+If any sub-step fails the method returns a list ("FAILED","detailed-failure-message");
+The method does not throw exception .. so caller does not need to have try-catch and rely just on STATUS-CODES 'OK' and 'FAILED' and respective messages; 
+
+
+
+COPYRIGHT AND LICENCE
+
+Put the correct copyright and licence information here.
+
+Copyright (C) 2013 by company 
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.8 or,
+at your option, any later version of Perl 5 you may have available.
+
+

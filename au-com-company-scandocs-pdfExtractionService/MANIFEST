@@ -1,0 +1,6 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/au-com-company-scandocs-pdfExtractionService.t
+lib/au/com/company/scandocs/pdfExtractionService.pm

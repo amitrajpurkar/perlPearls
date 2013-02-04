@@ -1,0 +1,6 @@
+Changes
+Makefile.PL
+MANIFEST
+README
+t/au-com-company-scandocs-pgService.t
+lib/au/com/company/scandocs/pgService.pm
