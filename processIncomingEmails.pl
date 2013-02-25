@@ -7,7 +7,7 @@ require 5.001;
 use strict;
 use MIME::Parser;
 use File::Copy;
-use File::Path;
+use File::Path qw(make_path remove_tree rmtree); 
 use File::stat;
 use Getopt::Std;
 use Mail::Sendmail;
@@ -27,14 +27,17 @@ use au::com::schenker::scandocs::pgService qw( :all );
 ## Q. Who fires this script? A. Run by system-cron-job.. look under /etc/crontab
 ## ------------------------------------------------
 
-# qmail-email related class variables
+# global variables for this script
 my $BASE_DIR="/export/email/domino/home/aqis_docs";
 my $OUT_DIR="$BASE_DIR/output";
 my $CODE_DIR="$BASE_DIR/code";
 my $APP = "$CODE_DIR/processIncomingEmails.pl";
 my $MAIL_DIR="$BASE_DIR/Maildir/new";
+#$MAIL_DIR="$BASE_DIR/archive/held";
+#$MAIL_DIR="$BASE_DIR/archive/test";
 my $ARCHIVE_DIR="$BASE_DIR/archive/success";
 my $HELD_DIR="$BASE_DIR/archive/held";
+my $TEMP_DIR="$BASE_DIR/tempFiles";
 my $MSG_NO = 1;
 my $TO="amit.rajpurkar\@dbschenker.com";
 my $FROM="aqis_docs\@domino.schenker.com.au";
@@ -42,10 +45,6 @@ my $FROM="aqis_docs\@domino.schenker.com.au";
 ## .. so its advisable to provide absolute path to log.conf file so that this script can be ran from any place.
 Log::Log4perl->init("$CODE_DIR/log.conf");
 
-# untaint the PATH... doesn't do any real validation
-my $envpath = $ENV{'PATH'};
-$envpath =~ /^(.*)$/;
-$ENV{'PATH'} = $1;
 # application specific class variables
 my $DOCUMENT_TYPE = "AQIS Direction";
 my $TODAYS_DATE;
@@ -60,11 +59,13 @@ eval {
     $logger->debug( "-------------------------------------------------- \n" );
     $logger->error( "INFO:: Triggering script at $now_string \n" );
     
+    
     unless (flock(LOCK,LOCK_EX|LOCK_NB)) {
       die("AQIS Direction Error: $APP already running\n");
     }
     $logger->debug("DEBUG:: file locking operation done \n");
     
+    &resetEnvPathIfNeeded();
     &initializeToday();
     &pollMaildir();
     &cleanupOutputDir();
@@ -86,6 +87,21 @@ if ($@) {
 #------------------------------------------------------------
 #       End of script
 #------------------------------------------------------------
+
+sub resetEnvPathIfNeeded() {
+    # untaint the PATH... doesn't do any real validation
+    my $envpath = $ENV{'PATH'};
+    $envpath =~ /^(.*)$/;
+    $logger->debug( "DEBUG:: env var path = $envpath \n" );
+    ## expect to see.. "/sbin:/bin:/usr/sbin:/usr/bin:/usr/games:/usr/local/sbin:/usr/local/bin:/usr/X11R6/bin:/root/bin"
+    ## we got ..       "/etc:/bin:/sbin:/usr/bin:/usr/sbin"
+    ## NOTE:: This happens when cronjob runs this script.. we got to reset this Environment Variable.
+    if(index($envpath, "/usr/local/bin") == -1) {
+        $envpath = "/sbin:/bin:/usr/sbin:/usr/bin:/usr/games:/usr/local/sbin:/usr/local/bin:/usr/X11R6/bin:/root/bin";
+        $logger->debug( "DEBUG:: resetting env var path = $envpath \n" );
+    }
+    $ENV{'PATH'} = $envpath;
+}
 
 sub initializeToday(){
     my (
@@ -127,7 +143,13 @@ sub pollMaildir {
   foreach $message_file (@new_messages) {
     $numOfMsgProcessed++;
     $logger->error("INFO:: msg no = $numOfMsgProcessed \n");
-    $returnFlag = processEachEmail($message_file) or die ("problem processing email..");
+    eval{
+        $returnFlag = processEachEmail($message_file);
+    };
+    if ($@) {
+        $logger->error( "ERROR processing email $message_file :: " . $@ );
+        next; ## process next email.. skip this one
+    } 
   }
   closedir(DIR);
   
@@ -139,7 +161,9 @@ sub pollMaildir {
 
 sub cleanupOutputDir {
     rmtree ($OUT_DIR);
-    mkdir $OUT_DIR, 0755 or die("couldn't make $OUT_DIR: $! \n");
+    mkdir $OUT_DIR,0777 ;
+    
+    return 1;
 }
 
 sub processEachEmail {
@@ -150,7 +174,7 @@ sub processEachEmail {
     my ($msgCode, $mgsDesc, $tempFolderLocation);
     $tempFolderLocation = $OUT_DIR;
     $msgCode = "initialize";
-    $logger->debug("DEBUG:: ------->> found message file = $msgFileParam <<------------ \n");
+    $logger->error("INFO:: ------->> found message file = $msgFileParam <<------------ \n");
     
     ($entity, $msgdir) = readAndParseEmail($msgFileParam);
     
@@ -169,7 +193,9 @@ sub processEachEmail {
         move("$MAIL_DIR/$msgFileParam", "$HELD_DIR/$msgFileParam");
         return "ERROR";
     } 
-    my $capturedAttachmentFile;
+    my $convertedAndMergedAttachments;
+    my $convertedAttachment;
+    my $attachmentCounter = 0;
 
     foreach $attachmentFile (<$msgdir/*>) {
       $attachmentFile =~ /^(.*)$/;   # this is to make taint checking shutup
@@ -179,19 +205,26 @@ sub processEachEmail {
       if ($ext=~/pdf/i || $ext=~/htm/i || $ext=~/html/i) {
           if (($ext=~/htm/i || $ext=~/html/i) && $filename ne "service") {
               $logger->error("INFO:: eligible attachment = $attachmentFile \n");
-              ($msgCode, $mgsDesc, $attachmentFile) = convertHtmlToPdf($attachmentFile);
-              $capturedAttachmentFile = prependOldDocumentToNew($capturedAttachmentFile, $attachmentFile);
+              ++$attachmentCounter;
+              $convertedAttachment = "$path/attachment_$attachmentCounter.pdf"; 
+              ($msgCode, $mgsDesc) = convertHtmlToPdf($attachmentFile, $convertedAttachment);
+              if($msgCode eq "ERROR") {
+                  $logger->error("ERROR:: Problem converting html attachment into PDF :: $mgsDesc");
+                  move("$MAIL_DIR/$msgFileParam", "$HELD_DIR/$msgFileParam");
+                  return "ERROR";
+              }
+              $convertedAndMergedAttachments = prependOldDocumentToNew($convertedAndMergedAttachments, $convertedAttachment);
           } elsif ($ext=~/pdf/i) {
               $logger->error("INFO:: eligible attachment = $attachmentFile \n");
-              $capturedAttachmentFile = prependOldDocumentToNew($capturedAttachmentFile, $attachmentFile);
+              $convertedAndMergedAttachments = prependOldDocumentToNew($convertedAndMergedAttachments, $attachmentFile);
           }
       } 
     }
-    if(defined $capturedAttachmentFile) {
+    if(defined $convertedAndMergedAttachments) {
         ## perldoc au::com::schenker::scandocs::pdfExtractionService
-        ($msgCode, $mgsDesc, $docid) = processEachPdfAttachment($capturedAttachmentFile,$insertAppendFlag,$shipnoFromEmail,$docid, $department, $branch, $DOCUMENT_TYPE, $tempFolderLocation, $TODAYS_DATE, $APP);
+        ($msgCode, $mgsDesc, $docid) = processEachPdfAttachment($convertedAndMergedAttachments,$insertAppendFlag,$shipnoFromEmail,$docid, $department, $branch, $DOCUMENT_TYPE, $tempFolderLocation, $TODAYS_DATE, $APP);
         $logger->debug("DEBUG:: msgCode = $msgCode \n");
-        $logger->debug("DEBUG:: mgsDesc = $mgsDesc \n");
+        $logger->debug("DEBUG:: msgDesc = $mgsDesc \n");
         $logger->debug("DEBUG:: docid = $docid \n");
     } else {
          $logger->debug("DEBUG:: no eligible attachment found in this email \n");
@@ -203,8 +236,11 @@ sub processEachEmail {
         move("$MAIL_DIR/$msgFileParam", "$ARCHIVE_DIR/$msgFileParam");
     } else {
         $logger->debug("DEBUG:: should archive message:: $HELD_DIR/$msgFileParam \n");
+        $logger->error("WARN:: msgCode = $msgCode , desc = $mgsDesc \n");
         move("$MAIL_DIR/$msgFileParam", "$HELD_DIR/$msgFileParam");
     }
+    
+    
     return "OK"; 
 }
 
@@ -246,7 +282,7 @@ sub makeMsgFolder {
         die("self-imposed limit reached \n");
     } 
   }
-  mkdir "$OUT_DIR/msg$MSG_NO",0755 or $logger->logdie("couldn't make $OUT_DIR/msg$MSG_NO: $! \n" );
+  mkdir "$OUT_DIR/msg$MSG_NO",0777 or $logger->logdie("couldn't make $OUT_DIR/msg$MSG_NO: $! \n" );
   return "$OUT_DIR/msg$MSG_NO";
 }
 
@@ -274,37 +310,49 @@ sub extractShipno {
 }
 
 sub convertHtmlToPdf {
-    my ($attachmentFile) = @_;
+    my ($attachmentFile, $convertedFile) = @_;
     my $pdf;
     my $htmldoc;
     
+    my ($path, $filename, $ext) = ($attachmentFile=~ /^(.*)\/(.*?)\.(.*)$/);
+    
     eval{
+        (-w $path) or die "$path not writable...";
+        
         $htmldoc = new HTML::HTMLDoc();
         $htmldoc->set_input_file($attachmentFile);
         $pdf = $htmldoc->generate_pdf();
-        $pdf->to_file($attachmentFile);
-        rename($attachmentFile, "$attachmentFile.pdf") or die ("cannot rename file:: $! \n");
+        my $lastError = $htmldoc->error(); ## its possible to get -- @allErrors = $htmldoc->error()
+        if(defined $lastError && $lastError ne "") { die("error generating pdf from html.. $lastError \n"); }
+        
+        my $isSuccessful = $pdf->to_file($convertedFile);
+        if(! $isSuccessful) { die("print to pdf not successful"); }
+        
+        sleep(3);
+        if( -z $convertedFile) { die("the converted file is empty"); }
+        if( -s $convertedFile) { $logger->debug("DEBUG:: the converted file has non-zero size"); }
     };
     if ($@) {
         $logger->error( "ERROR convertHtmlToPdf:: " . $@ );
-        return ("ERROR", "html to pdf conversion failed.. $@ \n", "");
+        return ("ERROR", "html to pdf conversion failed.. $@ \n");
     }    
-    
-    return ("OK", "converted html to pdf \n", "$attachmentFile.pdf");
+    return ("OK", "converted html to pdf \n");
 }
 
 sub prependOldDocumentToNew {
     my ($tempOldDocument, $newDocument) = @_;
-    if(! defined $tempOldDocument) { return $newDocument; }
-    
-    $logger->debug("DEBUG:: next line should create cam pdf doc\n");
-    my $newDoc = CAM::PDF->new($newDocument);
-    $logger->debug("DEBUG:: next line should create doc for old and prepend to new\n");
-    $newDoc->prependPDF(CAM::PDF->new($tempOldDocument));
-    $logger->debug("DEBUG:: next line should save referenced doc\n");
-    $newDoc->cleansave();
-    $newDoc->cleanoutput($newDocument);
-    $logger->debug("DEBUG:: hopefully object is closed\n");
+    my $newDoc;
+    if(defined $tempOldDocument) {
+        eval{
+            $newDoc = CAM::PDF->new($newDocument);
+            $newDoc->prependPDF(CAM::PDF->new($tempOldDocument));
+            $newDoc->cleansave();
+            $newDoc->cleanoutput($newDocument);
+        };
+        if ($@) {
+            $logger->error("ERROR:: $@ \n");
+        }
+    }
     
     return $newDocument;
 }
